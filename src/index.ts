@@ -44,14 +44,42 @@ let currentModel: string;
 
 export { IndexedDbManager, StoreOptions };
 
+export type DeviceOption = 'webgpu' | 'wasm' | 'cpu' | 'auto';
+
+async function detectDevice(): Promise<DeviceOption | undefined> {
+  // In a browser with WebGPU available, prefer it.
+  if (
+    typeof navigator !== 'undefined' &&
+    'gpu' in navigator &&
+    (navigator as any).gpu !== null
+  ) {
+    try {
+      const adapter = await (navigator as any).gpu.requestAdapter();
+      if (adapter) return 'webgpu';
+    } catch {
+      // WebGPU probe failed; fall through to runtime default.
+    }
+  }
+  // Otherwise let transformers.js pick the runtime-appropriate default
+  // (`wasm` in browsers, `cpu` in Node.js).
+  return undefined;
+}
+
 export const initializeModel = async (
   model: string = 'Xenova/gte-small',
   pipeline_str: string = 'feature-extraction',
+  device?: DeviceOption,
 ): Promise<void> => {
   if (model !== currentModel) {
-    const transformersModule = await import('@xenova/transformers');
+    const transformersModule = await import('@huggingface/transformers');
     const pipeline = transformersModule.pipeline;
-    pipe = await pipeline(pipeline_str, model);
+    const resolvedDevice =
+      device === 'auto' || device === undefined
+        ? await detectDevice()
+        : device;
+    const pipelineOptions: { device?: DeviceOption } = {};
+    if (resolvedDevice) pipelineOptions.device = resolvedDevice;
+    pipe = await pipeline(pipeline_str as any, model, pipelineOptions as any);
     currentModel = model;
   }
 };
@@ -61,6 +89,7 @@ export const getEmbedding = async (
   precision: number = 7,
   options = { pooling: 'mean', normalize: false },
   model = 'Xenova/gte-small',
+  device?: DeviceOption,
 ): Promise<number[]> => {
   const cachedEmbedding = cacheInstance.get(text);
   if (cachedEmbedding) {
@@ -68,7 +97,7 @@ export const getEmbedding = async (
   }
 
   if (model !== currentModel) {
-    await initializeModel(model);
+    await initializeModel(model, 'feature-extraction', device);
   }
 
   const output = await pipe(text, options);
